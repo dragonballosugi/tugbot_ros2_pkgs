@@ -1,0 +1,102 @@
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import (
+    EmitEvent,
+    LogInfo,
+    RegisterEventHandler,
+)
+from launch.events import matches_action
+from launch_ros.actions import LifecycleNode, Node
+from launch_ros.event_handlers import OnStateTransition
+from launch_ros.events.lifecycle import ChangeState
+from lifecycle_msgs.msg import Transition
+
+
+def generate_launch_description():
+    slam_node = LifecycleNode(
+        package='slam_toolbox',
+        executable='sync_slam_toolbox_node',
+        name='slam_toolbox',
+        namespace='',
+        output='screen',
+        parameters=[
+            get_package_share_directory('tugbot_slam')
+            + '/config/mapper_params_offline.yaml'
+        ],
+        remappings=[
+            ('/scan', '/scan'),
+        ],
+    )
+
+    configure_slam = EmitEvent(
+        event=ChangeState(
+            lifecycle_node_matcher=matches_action(slam_node),
+            transition_id=Transition.TRANSITION_CONFIGURE,
+        )
+    )
+
+    activate_slam = RegisterEventHandler(
+        OnStateTransition(
+            target_lifecycle_node=slam_node,
+            start_state='configuring',
+            goal_state='inactive',
+            entities=[
+                LogInfo(msg='Activating slam_toolbox...'),
+                EmitEvent(
+                    event=ChangeState(
+                        lifecycle_node_matcher=matches_action(slam_node),
+                        transition_id=Transition.TRANSITION_ACTIVATE,
+                    )
+                ),
+            ],
+        )
+    )
+
+    rviz2_node = Node(
+        name='rviz2',
+        package='rviz2',
+        executable='rviz2',
+        output='screen',
+        arguments=[
+            '-d',
+            get_package_share_directory('tugbot_slam')
+            + '/rviz/default.rviz',
+        ],
+    )
+
+    pointcloud_to_laserscan = Node(
+        package='pointcloud_to_laserscan',
+        executable='pointcloud_to_laserscan_node',
+        name='pointcloud_to_laserscan',
+        output='screen',
+        parameters=[
+            {'target_frame': 'base_link'},  # ターゲットフレーム
+            {'transform_tolerance': 0.01},  # 変換の許容誤差
+            {'min_height': 0.5},  # 最小高さ
+            {'max_height': 1.5},  # 最大高さ
+            {'angle_min': -1.57},  # 最小角度（ラジアン）
+            {'angle_max': 1.57},  # 最大角度（ラジアン）
+            {'angle_increment': 0.01},  # 角度の増分（ラジアン）
+            {'scan_time': 0.1},  # スキャン時間（秒）
+            {'range_min': 0.3},  # 最小範囲（メートル）
+            {'range_max': 30.0},  # 最大範囲（メートル）
+            {'use_inf': True},  # 無限遠を使用するかどうか
+        ],
+        remappings=[
+            (
+                'cloud_in',
+                '/world/world_demo/model/tugbot/link/'
+                'scan_omni/sensor/scan_omni/scan/points',
+            ),  # 入力PointCloud2トピック
+            ('scan', 'scan'),  # 出力LaserScanトピック
+        ],
+    )
+
+    ld = LaunchDescription()
+    ld.add_action(slam_node)
+    ld.add_action(configure_slam)
+    ld.add_action(activate_slam)
+    ld.add_action(rviz2_node)
+    ld.add_action(pointcloud_to_laserscan)
+
+    return ld
